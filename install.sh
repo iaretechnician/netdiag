@@ -14,12 +14,11 @@ set -euo pipefail
 # Non-login shells often leave out the sbin folders, where iptables lives.
 export PATH="/usr/local/sbin:/usr/sbin:/sbin:$PATH"
 
-REPO_URL="https://github.com/iaretechnician/netdiag.git"
 BRANCH="${NETDIAG_BRANCH:-main}"
 INSTALL_DIR="${NETDIAG_INSTALL_DIR:-$HOME/devkit-netdiag}"
 STATE_DIR="$HOME/.local/state/netdiag"
 STATE_FILE="$STATE_DIR/installed-versions.txt"
-REQUIRED_COMMANDS="git python3 ip ping traceroute ss iptables"
+REQUIRED_COMMANDS="curl tar python3 ip ping traceroute ss iptables"
 
 MODE="install"
 case "${1:-}" in
@@ -34,15 +33,19 @@ case "${1:-}" in
 esac
 
 fetch_code() {
-  if [ -d "$INSTALL_DIR/.git" ]; then
-    git -C "$INSTALL_DIR" fetch --quiet origin "$BRANCH"
-    git -C "$INSTALL_DIR" checkout --quiet "$BRANCH"
-    git -C "$INSTALL_DIR" merge --ff-only --quiet "origin/$BRANCH"
-    echo "Updated the code on branch $BRANCH."
-  else
-    git clone --quiet --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
-    echo "Downloaded the code from branch $BRANCH."
+  # Download the branch as an archive from GitHub and unpack it. Git is not needed.
+  local url="https://github.com/iaretechnician/netdiag/archive/refs/heads/$BRANCH.tar.gz"
+  local tmp
+  tmp=$(mktemp -d)
+  if ! curl -fsSL "$url" -o "$tmp/code.tar.gz"; then
+    echo "Could not download the code from $url" >&2
+    exit 1
   fi
+  tar -xzf "$tmp/code.tar.gz" -C "$tmp"
+  rm -rf "$INSTALL_DIR"
+  mv "$tmp/netdiag-$BRANCH" "$INSTALL_DIR"
+  rm -rf "$tmp"
+  echo "Downloaded the code from branch $BRANCH."
 }
 
 package_list() {
@@ -123,7 +126,7 @@ run_self_test() {
 
 main() {
   if [ "$MODE" = "check" ]; then
-    if [ ! -d "$INSTALL_DIR/.git" ]; then
+    if [ ! -f "$INSTALL_DIR/bin/netdiag" ]; then
       echo "Not installed at $INSTALL_DIR. Run: bash install.sh" >&2
       exit 1
     fi

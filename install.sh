@@ -33,7 +33,16 @@ case "${1:-}" in
 esac
 
 fetch_code() {
-  # Download the branch as an archive from GitHub and unpack it. Git is not needed.
+  # If this install.sh sits inside an unpacked download (the code is next to it), copy that code.
+  local here
+  here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+  if [ -f "$here/bin/netdiag" ] && [ "$here" != "$INSTALL_DIR" ]; then
+    rm -rf "$INSTALL_DIR"
+    cp -r "$here" "$INSTALL_DIR"
+    echo "Copied the code from $here."
+    return 0
+  fi
+  # Otherwise download the branch as an archive from GitHub. Git is not needed.
   local url="https://github.com/iaretechnician/netdiag/archive/refs/heads/$BRANCH.tar.gz"
   local tmp
   tmp=$(mktemp -d)

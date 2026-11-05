@@ -278,6 +278,7 @@ def terminal_text(facts, findings, folder):
     lines += ["  " + text for text in resources_summary(facts["resources"])]
     lines += remote_terminal_lines(facts)
     lines += pressure_terminal_lines(facts)
+    lines += capture_terminal_lines(facts)
     lines += checks_summary_lines(facts)
     lines += ["", "PROBLEMS, most serious first"]
     lines += problem_lines(findings)
@@ -301,13 +302,13 @@ def network_summary(facts):
 def ports_summary(local):
     """Terminal lines: OPEN and CLOSED, one port per line."""
     reachable, blocked = split_ports(local)
-    lines = ["OPEN (reachable from the boat network)"]
-    lines += ["  {:<6} {}".format(port, process) for port, process in unique_ports(reachable)] or ["  none"]
+    lines = ["OPEN (listening on the network)"]
+    lines += port_lines(reachable) or ["  none"]
     lines.append("CLOSED (blocked by the firewall)")
     if local["firewall"]["default_incoming"] == "unknown":
         lines.append("  unknown, the firewall rules could not be read")
     else:
-        lines += ["  {:<6} {}".format(port, process) for port, process in unique_ports(blocked)] or ["  none"]
+        lines += port_lines(blocked) or ["  none"]
     return lines
 
 
@@ -385,7 +386,8 @@ def checks_summary_lines(facts):
     """Terminal lines saying which checks ran and which flags add the rest."""
     selected = facts.get("selected_modules", [])
     waiting = [m["flag"] for m in facts.get("available_modules", []) if m["name"] not in selected]
-    lines = ["", "CHECKS", "  Run: " + ", ".join(["network"] + selected)]
+    run = ["network"] + (["deep (packet capture)"] if "capture" in facts else []) + selected
+    lines = ["", "CHECKS", "  Run: " + ", ".join(run)]
     if waiting:
         lines.append("  Not run, add the flag to include: " + " ".join(waiting))
     return lines
@@ -433,4 +435,28 @@ def capture_section(captures):
             "- Busiest destination ports: " + ports,
             "",
         ]
+    return lines
+
+
+def port_lines(items):
+    """One line per port number and program, sorted by port number. The same port on TCP and UDP shows once."""
+    unique = set()
+    for item in items:
+        unique.add((int(item["port"]), item["process"] or "?"))
+    return ["  {:<6} {}".format(port, process) for port, process in sorted(unique)]
+
+
+def capture_terminal_lines(facts):
+    """Terminal lines for the --deep packet capture: one line per network."""
+    if "capture" not in facts:
+        return []
+    lines = ["", "PACKET CAPTURE"]
+    for cap in facts["capture"]:
+        if cap.get("error"):
+            lines.append("  {}: not captured ({})".format(cap["interface"], cap["error"]))
+            continue
+        top = cap["top_sources"][0][0] if cap["top_sources"] else "none"
+        lines.append("  {} ({} s): {} packets, {} ARP requests, {} multicast, {} DNS, busiest source {}".format(
+            cap["interface"], cap["seconds"], cap["packets"], cap["arp_requests"],
+            cap["multicast_packets"], cap["dns_queries"], top))
     return lines

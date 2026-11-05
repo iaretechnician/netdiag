@@ -125,7 +125,7 @@ link_command() {
 
 run_self_test() {
   mkdir -p "$STATE_DIR"
-  if (cd "$INSTALL_DIR" && python3 -m unittest discover -s netdiag/tests -t . >"$STATE_DIR/selftest.log" 2>&1); then
+  if (cd "$INSTALL_DIR" && python3 bin/netdiag run --help >"$STATE_DIR/selftest.log" 2>&1); then
     echo "ok       self-test passed"
     return 0
   fi

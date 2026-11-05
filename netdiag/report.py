@@ -39,6 +39,8 @@ def render(facts, findings):
     lines += resources_section(facts["resources"])
     lines += pressure_section(facts)
     lines += traceroute_section(facts)
+    lines += commands_section(facts)
+    lines += ai_section(facts)
     lines += module_sections(facts)
     lines += not_run_section(facts)
     lines += problems_section(findings)
@@ -114,6 +116,8 @@ def ports_section(local):
     else:
         lines += port_bullets(blocked) or ["- none"]
     lines += ["", "Listening only on this machine: " + str(len(local_only)), ""]
+    lines += port_bullets(local_only) or ["- none"]
+    lines.append("")
     return lines
 
 
@@ -280,6 +284,7 @@ def terminal_text(facts, findings, folder):
     lines += pressure_terminal_lines(facts)
     lines += capture_terminal_lines(facts)
     lines += checks_summary_lines(facts)
+    lines += ai_terminal_lines(facts)
     lines += ["", "PROBLEMS, most serious first"]
     lines += problem_lines(findings)
     return "\n".join(lines)
@@ -309,6 +314,9 @@ def ports_summary(local):
         lines.append("  unknown, the firewall rules could not be read")
     else:
         lines += port_lines(blocked) or ["  none"]
+    local_only = [item for item in local["ports"].get("list", []) if not item["exposed"]]
+    lines.append("LISTENING ONLY ON THIS MACHINE")
+    lines += port_lines(local_only) or ["  none"]
     return lines
 
 
@@ -459,4 +467,63 @@ def capture_terminal_lines(facts):
         lines.append("  {} ({} s): {} packets, {} ARP requests, {} multicast, {} DNS, busiest source {}".format(
             cap["interface"], cap["seconds"], cap["packets"], cap["arp_requests"],
             cap["multicast_packets"], cap["dns_queries"], top))
+    return lines
+
+
+def commands_section(facts):
+    """Every command the follow-up checks ran, with its full output."""
+    entries = facts.get("commands")
+    if not entries:
+        return []
+    lines = ["## Command output", "", "Each command the follow-up checks ran, with its full output.", ""]
+    for entry in entries:
+        lines += [
+            "### $ " + entry["command"],
+            "",
+            "Exit code " + str(entry["returncode"]) + ", took " + str(entry["seconds"]) + " s.",
+            "",
+            "```",
+            entry["output"].strip() or "(no output)",
+            "```",
+            "",
+        ]
+    return lines
+
+
+def ai_section(facts):
+    """The AI review: its findings, the follow-up checks it asked for, and any problem reaching it."""
+    ai = facts.get("ai")
+    if not ai:
+        return []
+    lines = ["## AI review", ""]
+    if ai.get("skipped"):
+        return lines + [ai["skipped"], ""]
+    lines += ["Model: " + ai["model"] + ". Reviews run: " + str(len(ai["rounds"])) + ".", ""]
+    for note in ai.get("warnings", []):
+        lines += ["Note: " + note, ""]
+    if ai.get("error"):
+        lines += ["The review stopped early: " + ai["error"], ""]
+    for item in ai.get("findings", []):
+        lines += ["### " + str(item.get("severity", "")).upper() + ": " + str(item.get("title", "")), "",
+                  "Why: " + str(item.get("why", "")), "", "Next: " + str(item.get("next", "")), ""]
+    asked = [req for rnd in ai["rounds"] for req in rnd.get("follow_up", [])]
+    if asked:
+        lines += ["### Follow-up checks the review asked for", ""]
+        lines += ["- " + str(req.get("name", "")) + " " + str(req.get("interface") or "") + ": " + str(req.get("reason", "")) for req in asked]
+        lines.append("")
+    return lines
+
+
+def ai_terminal_lines(facts):
+    ai = facts.get("ai")
+    if not ai:
+        return []
+    lines = ["", "AI REVIEW (" + str(ai.get("model", "")) + ")"]
+    if ai.get("skipped"):
+        return lines + ["  " + ai["skipped"]]
+    if ai.get("error"):
+        lines.append("  stopped early: " + ai["error"])
+    for item in ai.get("findings", [])[:6]:
+        lines.append("  {}  {}".format(str(item.get("severity", "")).upper(), item.get("title", "")))
+    lines.append("  Details: the AI review section of the report")
     return lines

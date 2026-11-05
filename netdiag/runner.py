@@ -26,6 +26,8 @@ def collect(quick, selected, deep=False):
     ]
     if deep:
         facts["capture"] = [stages.capture_network(net) for net in lan.get("networks", [])]
+        from netdiag import investigate
+        facts["commands"] = investigate.follow_up(facts)
     if not quick:
         facts["path"] = stages.path_facts(stages.DEFAULT_TARGETS)
         facts["follow_up"] = run_follow_ups(facts)

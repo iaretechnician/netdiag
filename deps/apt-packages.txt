@@ -1,0 +1,13 @@
+# Ubuntu packages the netdiag tool needs. One per line.
+# Tested on Ubuntu 22.04 (JetPack) and 24.04.
+git
+python3
+iproute2
+iputils-ping
+traceroute
+iptables
+nftables
+iputils-arping
+nmap
+ethtool
+iw

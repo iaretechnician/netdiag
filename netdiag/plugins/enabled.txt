@@ -1,0 +1,3 @@
+# One plugin per line. The devkit plugin ships with the devkit product.
+devkit
+hardware

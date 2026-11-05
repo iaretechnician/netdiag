@@ -18,9 +18,17 @@ def build_parser(modules):
     run_parser.add_argument("--network", action="store_true", help="base network checks (always run)")
     run_parser.add_argument("--quick", action="store_true", help="skip the internet path checks")
     run_parser.add_argument("--all", action="store_true", help="run every check module")
+    run_parser.add_argument("--deep", action="store_true", help="more detail: a 30-second packet capture on each network")
     run_parser.add_argument("--out", type=Path, help="folder for results (default: ./netdiag-results/<time>)")
+    # Modules in one group, such as proteus and apollo, cannot be picked together.
+    groups = {}
     for module in modules.values():
-        run_parser.add_argument(module.flag, action="store_true", help=module.summary)
+        target = run_parser
+        if module.group:
+            if module.group not in groups:
+                groups[module.group] = run_parser.add_mutually_exclusive_group()
+            target = groups[module.group]
+        target.add_argument(module.flag, action="store_true", help=module.summary)
     log_parser = commands.add_parser("log", help="record CPU, memory, disk-stall and GPU use over time")
     log_parser.add_argument("--minutes", type=int, default=10,
                             help="how long to record, 1 to {} (default 10)".format(pressure.MAX_MINUTES))
@@ -45,7 +53,7 @@ def run(args, modules):
     selected = chosen_modules(args, modules)
     folder = args.out or default_folder()
     folder.mkdir(parents=True, exist_ok=True)
-    facts = runner.collect(quick=args.quick, selected=selected)
+    facts = runner.collect(quick=args.quick, selected=selected, deep=args.deep)
     findings = rules.analyse(facts)
     report.write_results(folder, facts, findings)
     print(report.terminal_text(facts, findings, folder))

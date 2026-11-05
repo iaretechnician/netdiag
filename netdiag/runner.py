@@ -4,7 +4,7 @@ from netdiag.commands import run_command
 from netdiag.plugin import load_modules
 
 
-def collect(quick, selected):
+def collect(quick, selected, deep=False):
     """Collect all facts. The base network always runs. Modules run only when selected."""
     local = stages.local_facts()
     system = stages.system_facts()
@@ -24,6 +24,8 @@ def collect(quick, selected):
         {"name": module.name, "flag": module.flag, "summary": module.summary}
         for module in modules.values()
     ]
+    if deep:
+        facts["capture"] = [stages.capture_network(net) for net in lan.get("networks", [])]
     if not quick:
         facts["path"] = stages.path_facts(stages.DEFAULT_TARGETS)
         facts["follow_up"] = run_follow_ups(facts)

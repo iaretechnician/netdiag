@@ -93,5 +93,5 @@ MODULE = Module(
     name="proteus", flag="--proteus",
     summary="ProteusCore radar software: ports, multicast and radar traffic",
     collect=collect, rules=rules, section=section,
-    requires=("ironman",),
+    requires=("ironman", "poseidon"), group="devkit-product",
 )

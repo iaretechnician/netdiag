@@ -9,7 +9,7 @@ ENABLED_FILE = PLUGIN_DIR / "enabled.txt"
 class Module:
     """One optional check set, selected by its flag, for example --proteus."""
 
-    def __init__(self, name, flag, summary, collect, rules, section, requires=()):
+    def __init__(self, name, flag, summary, collect, rules, section, requires=(), group=None):
         self.name = name
         self.flag = flag                 # command line flag, for example "--proteus"
         self.summary = summary           # one line shown in the menu
@@ -17,6 +17,7 @@ class Module:
         self.rules = rules               # function(facts) -> list of findings
         self.section = section           # function(facts) -> list of report lines
         self.requires = tuple(requires)  # other modules that must also run
+        self.group = group               # modules in one group cannot be picked together
 
 
 def enabled_plugin_names():

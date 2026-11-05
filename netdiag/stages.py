@@ -24,7 +24,8 @@ NFT_ACCEPT = re.compile(r"(tcp|udp) dport (\d+)[^\n]*accept")
 NFT_DROP_POLICY = re.compile(r"hook input[^\n]*policy drop")
 UFW_ALLOW = re.compile(r"^(\d+)(?:/(tcp|udp))?\s+ALLOW", re.M)
 MAC_IN_TEXT = re.compile(r"([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})")
-DEVICE_SCAN_MIN_PREFIX = 24
+VIRTUAL_PORT_PREFIXES = ("tailscale", "docker", "veth", "br-", "virbr", "zt", "wg")
+NMAP_TIMEOUT = 900  # seconds; a large network can take a few minutes to scan
 
 
 def read_text(path):
@@ -255,7 +256,7 @@ def lan_facts(route, system):
         "ping": ping_facts(route["gateway"]),
         "neighbours": neighbour_count(),
         "duplicate": own_address_check(interface, system),
-        "devices": device_facts(interface, system),
+        "networks": scan_networks(system),
     }
 
 
@@ -281,21 +282,72 @@ def duplicate_ip_facts(interface, ip):
     return {"ip": ip, "error": error_text(result)}
 
 
-def device_facts(interface, system):
-    """List the devices that answer on the devkit's subnet."""
-    iface = find_interface(system, interface)
-    if iface is None or not iface["addresses"]:
-        return {"skipped": "no IPv4 address on " + interface}
-    addr = iface["addresses"][0]
-    if addr["prefix"] < DEVICE_SCAN_MIN_PREFIX:
-        return {"skipped": "subnet is bigger than /24, so it is not scanned"}
-    network = ipaddress.ip_interface(addr["ip"] + "/" + str(addr["prefix"])).network
-    result = run_command(["nmap", "-sn", "-n", "-oX", "-", str(network)], timeout=300, privileged=True)
+def scanned_networks(system):
+    """Every real network port with an IPv4 address: the boat LAN, Wi-Fi, and any other."""
+    networks = []
+    for iface in system["interfaces"].get("list", []):
+        if iface["name"].startswith(VIRTUAL_PORT_PREFIXES) or not iface["addresses"]:
+            continue
+        addr = iface["addresses"][0]
+        network = ipaddress.ip_interface(addr["ip"] + "/" + str(addr["prefix"])).network
+        networks.append({"interface": iface["name"], "address": addr["ip"], "network": str(network)})
+    return networks
+
+
+def scan_networks(system):
+    """Find the devices on every network the devkit is on. Always runs: a missing tool is reported, not skipped."""
+    results = []
+    for net in scanned_networks(system):
+        scan = nmap_scan(net["network"])
+        net["nmap"] = scan["status"]
+        net["error"] = scan.get("error")
+        net["devices"] = merge_devices(scan.get("devices", []), neighbour_entries(net["interface"]))
+        results.append(net)
+    return results
+
+
+def nmap_scan(network):
+    """Ping every address on the network with nmap. Status is ok, absent (not installed), or error."""
+    result = run_command(["nmap", "-sn", "-n", "-oX", "-", network], timeout=NMAP_TIMEOUT, privileged=True)
     if not result["available"]:
-        return {"absent": True}
+        return {"status": "absent"}
     if result["returncode"] != 0:
-        return {"error": error_text(result)}
-    return {"network": str(network), "list": parse_nmap_xml(result["stdout"])}
+        return {"status": "error", "error": error_text(result)}
+    return {"status": "ok", "devices": parse_nmap_xml(result["stdout"])}
+
+
+def neighbour_entries(interface):
+    """Devices this machine has talked to recently, from the kernel's neighbour table. Sends no traffic."""
+    result = run_command(["ip", "-j", "neigh", "show", "dev", interface])
+    if result["returncode"] != 0:
+        return []
+    entries = []
+    for entry in json.loads(result["stdout"] or "[]"):
+        state = entry.get("state", [])
+        state = " ".join(state) if isinstance(state, list) else str(state)
+        if not entry.get("lladdr") or state in ("FAILED", "INCOMPLETE"):
+            continue
+        entries.append({"ip": entry["dst"], "mac": entry["lladdr"], "state": state})
+    return entries
+
+
+def merge_devices(scanned, neighbours):
+    """One row per IP address, showing how each device was seen: by the ping scan, the neighbour table, or both."""
+    by_ip = {}
+    for device in scanned:
+        if device["ip"] is None:
+            continue
+        by_ip[device["ip"]] = {"ip": device["ip"], "mac": device["mac"], "vendor": device["vendor"],
+                               "seen": ["ping"], "state": None}
+    for entry in neighbours:
+        device = by_ip.get(entry["ip"])
+        if device is None:
+            device = {"ip": entry["ip"], "mac": None, "vendor": None, "seen": [], "state": None}
+            by_ip[entry["ip"]] = device
+        device["mac"] = device["mac"] or entry["mac"]
+        device["seen"].append("neighbour table")
+        device["state"] = entry["state"]
+    return sorted(by_ip.values(), key=lambda device: ipaddress.ip_address(device["ip"]))
 
 
 def parse_nmap_xml(text):
@@ -485,3 +537,54 @@ def top_processes():
                 break
             rows.append({"name": parts[0], "cpu_percent": float(parts[1]), "mem_percent": float(parts[2])})
     return rows
+
+
+CAPTURE_SECONDS = 30
+CAPTURE_PACKET = re.compile("^[0-9.]+ IP ([0-9]+[.][0-9]+[.][0-9]+[.][0-9]+)(?:[.]([0-9]+))? > ([0-9]+[.][0-9]+[.][0-9]+[.][0-9]+)(?:[.]([0-9]+))?:")
+
+
+def capture_network(net):
+    """Listen on one network for 30 seconds and summarise what is seen. Sends nothing; it only listens."""
+    result = run_command(
+        ["timeout", str(CAPTURE_SECONDS), "tcpdump", "-i", net["interface"], "-nn", "-l", "-tt"],
+        timeout=CAPTURE_SECONDS + 60, privileged=True,
+    )
+    if not result["available"]:
+        return {"interface": net["interface"], "error": "tcpdump is not installed"}
+    if not result["stdout"].strip():
+        return {"interface": net["interface"], "error": error_text(result)}
+    summary = parse_capture(result["stdout"])
+    summary.update({"interface": net["interface"], "seconds": CAPTURE_SECONDS})
+    return summary
+
+
+def parse_capture(text):
+    """Count what a capture shows: packets, ARP requests, multicast, DNS, and the busiest sources and ports."""
+    from collections import Counter
+    packets = arp_requests = multicast = dns = 0
+    sources = Counter()
+    ports = Counter()
+    for line in text.splitlines():
+        if re.match("^[0-9]+[.][0-9]+ ", line):
+            packets += 1
+        if " ARP, Request" in line:
+            arp_requests += 1
+        match = CAPTURE_PACKET.match(line)
+        if not match:
+            continue
+        src, dst, dst_port = match.group(1), match.group(3), match.group(4)
+        sources[src] += 1
+        if dst_port:
+            ports[int(dst_port)] += 1
+        if dst_port == "53":
+            dns += 1
+        if int(dst.split(".")[0]) in range(224, 240):
+            multicast += 1
+    return {
+        "packets": packets,
+        "arp_requests": arp_requests,
+        "multicast_packets": multicast,
+        "dns_queries": dns,
+        "top_sources": sources.most_common(5),
+        "top_ports": ports.most_common(5),
+    }

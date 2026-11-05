@@ -126,5 +126,5 @@ MODULE = Module(
     name="apollo", flag="--apollo",
     summary="ApolloCore: camera video, camera link, and radar (includes ProteusCore)",
     collect=collect, rules=rules, section=section,
-    requires=("proteus", "ironman"),
+    requires=("ironman", "poseidon", "proteus"), group="devkit-product",
 )

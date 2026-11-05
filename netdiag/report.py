@@ -31,6 +31,8 @@ def render(facts, findings):
     lines += network_section(facts)
     lines += remote_section(facts)
     lines += devices_section(facts["lan"])
+    if "capture" in facts:
+        lines += capture_section(facts["capture"])
     lines += ports_section(facts["local"])
     lines += firewall_section(facts["local"])
     lines += internet_section(facts)
@@ -77,27 +79,27 @@ def network_section(facts):
 
 
 def devices_section(lan):
-    devices = lan.get("devices") or {}
-    lines = ["## Devices on the boat network", ""]
-    if "list" in devices:
-        lines += [
-            "Found " + str(len(devices["list"])) + " device(s) on " + devices["network"] + ".", "",
-            "| IP | MAC | Vendor |", "|---|---|---|",
-        ]
-        for device in devices["list"]:
-            lines.append("| {} | {} | {} |".format(
-                device["ip"], device["mac"] or "unknown", device["vendor"] or "unknown"))
+    lines = ["## Devices on each network", ""]
+    networks = lan.get("networks", [])
+    if not networks:
+        return lines + ["No network port with an IPv4 address was found.", ""]
+    for net in networks:
+        lines += ["### " + net["interface"] + " (" + net["network"] + ")", ""]
+        if net["nmap"] == "absent":
+            lines += ["The full scan did not run, because nmap is not installed. Only devices the devkit has talked to recently are listed.", ""]
+        elif net["nmap"] == "error":
+            lines += ["The scan failed: " + net["error"], ""]
+        if not net["devices"]:
+            lines += ["No devices found.", ""]
+            continue
+        lines += ["Found " + str(len(net["devices"])) + " device(s).", "",
+                  "| IP | MAC | Vendor | Seen by | Neighbour state |", "|---|---|---|---|---|"]
+        for device in net["devices"]:
+            lines.append("| {} | {} | {} | {} | {} |".format(
+                device["ip"], device["mac"] or "unknown", device["vendor"] or "unknown",
+                ", ".join(device["seen"]), device["state"] or "-"))
         lines.append("")
-        return lines
-    if "skipped" in devices:
-        reason = devices["skipped"]
-    elif "error" in devices:
-        reason = "The scan failed: " + devices["error"]
-    elif devices.get("absent"):
-        reason = "Not scanned, because nmap is not installed"
-    else:
-        reason = "Not scanned"
-    return lines + [reason + ".", ""]
+    return lines
 
 
 def ports_section(local):
@@ -291,11 +293,8 @@ def network_summary(facts):
     lan = facts["lan"]
     lines.append("Gateway: " + str(lan.get("gateway") or "none")
                  + "   DNS: " + (", ".join(facts["local"]["dns_servers"]) or "none"))
-    devices = lan.get("devices") or {}
-    if "list" in devices:
-        lines.append("Devices on " + devices["network"] + ": " + str(len(devices["list"])) + " (list in the report)")
-    else:
-        lines.append("Devices: not scanned")
+    for net in lan.get("networks", []):
+        lines.append("Devices on " + net["interface"] + " (" + net["network"] + "): " + str(len(net["devices"])))
     return lines
 
 
@@ -414,3 +413,24 @@ def pressure_terminal_lines(facts):
     if "pressure" not in facts:
         return []
     return ["", "PRESSURE"] + ["  " + text for text in pressure.terminal_lines(facts["pressure"])]
+
+
+def capture_section(captures):
+    lines = ["## Packet capture", ""]
+    for cap in captures:
+        if cap.get("error"):
+            lines += ["### " + cap["interface"], "", "Not captured: " + cap["error"], ""]
+            continue
+        sources = ", ".join(ip + " (" + str(count) + ")" for ip, count in cap["top_sources"]) or "none"
+        ports = ", ".join(str(port) + " (" + str(count) + ")" for port, count in cap["top_ports"]) or "none"
+        lines += [
+            "### " + cap["interface"] + " (" + str(cap["seconds"]) + " seconds)", "",
+            "- Packets: " + str(cap["packets"]),
+            "- ARP requests: " + str(cap["arp_requests"]),
+            "- Multicast packets: " + str(cap["multicast_packets"]),
+            "- DNS queries: " + str(cap["dns_queries"]),
+            "- Busiest sources: " + sources,
+            "- Busiest destination ports: " + ports,
+            "",
+        ]
+    return lines

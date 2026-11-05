@@ -46,6 +46,10 @@ def analyse(facts):
     findings += resource_findings(facts["resources"])
     findings += link_findings(facts["system"])
     findings += gateway_findings(facts["lan"])
+    findings += device_findings(facts["lan"])
+    findings += same_mac_findings(facts["lan"])
+    if "capture" in facts:
+        findings += capture_findings(facts["capture"])
     if "path" in facts:
         findings += path_findings(facts["path"], facts["lan"])
     findings += module_findings(facts)
@@ -512,3 +516,68 @@ def lossy_hosts(facts):
 
 def is_lossy(ping):
     return "error" in ping or ping["loss_percent"] >= LOSS_LIMIT
+
+
+def device_findings(lan):
+    """Problems with the device scan itself. The devices it finds are listed in the report."""
+    out = []
+    for net in lan.get("networks", []):
+        if net["nmap"] == "absent":
+            out.append(finding(
+                "warning",
+                "The device scan could not run on " + net["interface"] + ": nmap is not installed",
+                "Only devices the devkit has talked to recently are listed for " + net["network"] + ". Other devices on that network are not found.",
+                "Install nmap with: sudo apt install nmap. Then run the check again.",
+            ))
+        elif net["nmap"] == "error":
+            out.append(finding(
+                "warning",
+                "The device scan failed on " + net["interface"],
+                net["error"],
+                "Run the check again. If it repeats, include the report when you ask for help.",
+            ))
+    return out
+
+
+def same_mac_findings(lan):
+    """One device that answers on two networks joins them, so traffic can pass between them."""
+    where = {}
+    for net in lan.get("networks", []):
+        for device in net["devices"]:
+            if device["mac"]:
+                where.setdefault(device["mac"], set()).add(net["interface"])
+    out = []
+    for mac, interfaces in sorted(where.items()):
+        if len(interfaces) > 1:
+            out.append(finding(
+                "warning",
+                "One device (MAC " + mac + ") answers on two networks",
+                "It answers on " + ", ".join(sorted(interfaces)) + ". That joins the networks through it.",
+                "Check whether one router is connected to both networks. If that is not intended, unplug the extra link.",
+            ))
+    return out
+
+
+ARP_PER_SECOND_LIMIT = 5.0
+
+
+def capture_findings(captures):
+    """Problems seen in the packet captures. A capture that could not run is reported as info."""
+    out = []
+    for cap in captures:
+        if cap.get("error"):
+            out.append(finding(
+                "info",
+                "The packet capture did not run on " + cap["interface"],
+                cap["error"],
+                "Install tcpdump (sudo apt install tcpdump), then run --deep again.",
+            ))
+            continue
+        if cap["arp_requests"] / float(cap["seconds"]) > ARP_PER_SECOND_LIMIT:
+            out.append(finding(
+                "warning",
+                "Many ARP requests on " + cap["interface"] + ": " + str(cap["arp_requests"]) + " in " + str(cap["seconds"]) + " seconds",
+                "Devices keep asking who has each address. This usually means a loop, a duplicate address, or a device that cannot find its gateway.",
+                "Check the device table for duplicate addresses, and look for a loop between the two networks.",
+            ))
+    return out

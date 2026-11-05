@@ -1,5 +1,5 @@
-# Ubuntu packages the netdiag tool needs. One per line.
-# Tested on Ubuntu 22.04 (JetPack) and 24.04.
+# Packages the netdiag tool needs on Ubuntu or Debian. One per line.
+# Tested on Ubuntu 24.04 and Debian 12 (bookworm).
 git
 python3
 iproute2
@@ -11,3 +11,4 @@ iputils-arping
 nmap
 ethtool
 iw
+tcpdump
